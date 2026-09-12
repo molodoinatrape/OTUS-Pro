@@ -46,7 +46,7 @@ poetry install
 
 Для тестового запуска на маленьком логе используйте готовую конфигурацию:
 ```shell
-  poetry run python log_analyzer.py --config config.logging.json
+poetry run python log_analyzer.py --config config.logging.json
 ```
 
 Она использует лог из _tests/sample_ и сохраняет результаты:
