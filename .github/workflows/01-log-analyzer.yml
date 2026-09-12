@@ -1,0 +1,36 @@
+name: Проверки анализатора логов
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: homeworks/01_log_analyzer
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Установка Poetry
+        run: python -m pip install poetry==2.4.3
+
+      - name: Проверка Poetry
+        run: poetry check --lock
+
+      - name: Установка зависимостей
+        run: poetry install --no-interaction
+
+      - name: Проверки кода
+        run: make lint
+
+      - name: Тесты
+        run: make test

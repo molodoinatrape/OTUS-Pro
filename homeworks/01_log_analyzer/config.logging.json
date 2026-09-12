@@ -1,0 +1,6 @@
+{
+  "LOG_DIR": "tests/sample",
+  "REPORT_DIR": "reports",
+  "REPORT_SIZE": 10,
+  "LOG_FILE": "logs/analyzer.jsonl"
+}

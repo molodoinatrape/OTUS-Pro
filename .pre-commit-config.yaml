@@ -1,0 +1,15 @@
+repos:
+  - repo: local
+    hooks:
+      - id: log-analyzer-lint
+        name: Проверки анализатора логов
+        entry: make -C homeworks/01_log_analyzer lint
+        language: system
+        pass_filenames: false
+        files: ^homeworks/01_log_analyzer/
+      - id: log-analyzer-poetry
+        name: Проверка конфигурации Poetry
+        entry: poetry -C homeworks/01_log_analyzer check --lock
+        language: system
+        pass_filenames: false
+        files: ^homeworks/01_log_analyzer/

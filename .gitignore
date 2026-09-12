@@ -1,3 +1,14 @@
 .idea
-
 docs
+*.py[cod]
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 01_log_analyzer
+/homeworks/01_log_analyzer/logs/
+/homeworks/01_log_analyzer/reports/
+/homeworks/01_log_analyzer/.venv
