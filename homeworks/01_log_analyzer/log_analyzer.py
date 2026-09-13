@@ -319,6 +319,8 @@ def main(
 
     stream: TextIO | None = None
 
+    exit_code = 0
+
     try:
         overrides = read_config(args.config)
         validated_config = validate_overrides(overrides)
@@ -366,16 +368,27 @@ def main(
         else:
             logger.info("Отчёт создан", report_path=str(report_path))
 
-    except Exception, KeyboardInterrupt:
-        logger.error("Ошибка обработки", exc_info=True)
-        return 1
+    except (Exception, KeyboardInterrupt) as original_error:
+        try:
+            logger.error("Ошибка обработки", exc_info=original_error)
+        except OSError:
+            setup_logging()
+            logger = structlog.get_logger()
+            logger.error("Ошибка обработки", exc_info=original_error)
+
+        exit_code = 1
 
     finally:
         if stream is not None:
             setup_logging()
-            stream.close()
+            logger = structlog.get_logger()
+            try:
+                stream.close()
+            except OSError:
+                logger.error("Ошибка закрытия журнала", exc_info=True)
+                exit_code = 1
 
-    return 0
+    return exit_code
 
 
 def setup_logging(stream: TextIO | None = None) -> None:
