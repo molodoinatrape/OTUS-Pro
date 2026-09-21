@@ -1,0 +1,9 @@
+services:
+  analyzer:
+    build: .
+    image: log-analyzer:dev
+    command: ["--config", "/config/config.json"]
+    volumes:
+      - "./tests/sample:/data/logs:ro"
+      - "./config.docker.json:/config/config.json:ro"
+      - "./reports/docker:/data/reports"

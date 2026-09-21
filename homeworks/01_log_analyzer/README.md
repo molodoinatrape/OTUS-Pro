@@ -51,27 +51,27 @@ poetry run python log_analyzer.py --config config.logging.json
 
 Она использует лог из _tests/sample_ и сохраняет результаты:
 
-_reports/report-2017.06.29.html
-reports/jquery.tablesorter.min.js
-logs/analyzer.jsonl_
+    reports/report-2017.06.29.html
+    reports/jquery.tablesorter.min.js
+    logs/analyzer.jsonl
 
 Откройте HTML-файл в браузере. Нажатие на заголовок столбца меняет
 порядок сортировки.
 
 В этой конфигурации сообщения программы записываются в файл:
 
-_logs/analyzer.jsonl_
+    logs/analyzer.jsonl
 
 ## Обработка собственных логов
 
 Создайте каталог logs и поместите в него файлы с именами вида:
 
-_nginx-access-ui.log-20170630
-nginx-access-ui.log-20170630.gz_
+    nginx-access-ui.log-20170630
+    nginx-access-ui.log-20170630.gz
 
 Формат имени:
 
-_nginx-access-ui.log-YYYYMMDD[.gz]_
+    nginx-access-ui.log-YYYYMMDD[.gz]
 
 Дата должна быть корректной календарной датой. Файлы с другими именами
 не участвуют в выборе лога.
@@ -114,7 +114,8 @@ poetry run python log_analyzer.py --config config.logging.json
   "LOG_DIR": "tests/sample",
   "REPORT_DIR": "reports",
   "REPORT_SIZE": 10,
-  "LOG_FILE": "logs/analyzer.jsonl"
+  "LOG_FILE": "logs/analyzer.jsonl",
+  "PARSE_ERROR_THRESHOLD": 0.5
 }
 ```
 
@@ -124,6 +125,7 @@ poetry run python log_analyzer.py --config config.logging.json
 **REPORT_DIR** - Каталог готовых отчётов - "reports"
 **REPORT_SIZE** - Максимальное количество URL в отчёте - 1000
 **LOG_FILE** - Путь к журналу работы анализатора - Не задан: вывод в терминал
+**PARSE_ERROR_THRESHOLD** - Порог ошибок (от 0 до 1 включительно)
 
 Правила настройки:
 
@@ -135,6 +137,9 @@ poetry run python log_analyzer.py --config config.logging.json
 - REPORT_SIZE должен быть положительным целым числом
 - Строка "10" и логическое значение TRUE не принимаются вместо числового REPORT_SIZE
 - Неизвестные параметры отклоняются
+- При превышении порога ошибок - ошибка и код 1, отчёт не создаётся
+- Порог по умолчанию - 0.5 (50%), проверяется после полного чтения
+- Для пересчёта нужно убрать существующий отчёт
 
 Справка по аргументам:
 
@@ -155,15 +160,17 @@ poetry run python log_analyzer.py --help
 **time_max** - Максимальное время обработки
 **time_med** - Медианное время обработки
 
+    Если отчёт для выбранного лога уже существует - повторный не создаётся.
+
 Временные метрики измеряются в секундах.
 
 Имя отчёта содержит дату обработанного лога:
 
-_reports/report-YYYY.MM.DD.html_
+    reports/report-YYYY.MM.DD.html
 
 Например:
 
-_reports/report-2017.06.30.html_
+    reports/report-2017.06.30.html
 
 Для создания отчёта используются файлы из _templates_:
 
@@ -179,15 +186,17 @@ _reports/report-2017.06.30.html_
 
 Пример события:
 
-_{"event": "Анализатор запущен", "level": "info", "timestamp": "2026-09-12T14:08:44Z"}_
+    {"event": "Анализатор запущен", "level": "info", "timestamp": "2026-09-12T14:08:44Z"}
 
 В событиях содержатся:
 
-- **event** - описание события
-- **level** - уровень сообщения
-- **timestamp** - время в UTC
-- дополнительные поля, например report_path
-- **exception** - traceback при ошибке
+|                         |                       |
+|-------------------------|-----------------------|
+| event                   | описание события      |
+| level                   | уровень сообщения     |
+| timestamp               | время UTC             |
+| exception               | traceback при ошибке  |
+| дополнительные<br/>поля | например, report_path |
 
 Повторный запуск сохраняет предыдущие сообщения и добавляет новые.
 
@@ -226,7 +235,7 @@ poetry run mypy log_analyzer.py
 poetry run flake8 log_analyzer.py tests
 ```
 
-  ## Использованные инструменты
+## Использованные инструменты
 
 - [Poetry](https://python-poetry.org/) - управление зависимостями
 - [pytest](https://docs.pytest.org/) - тестирование.
@@ -236,3 +245,24 @@ poetry run flake8 log_analyzer.py tests
 - [mypy](https://mypy.readthedocs.io/) - проверка типов
 - [Flake8](https://flake8.pycqa.org/) - проверка стиля
 - [tablesorter](https://mottie.github.io/tablesorter/docs/) - сортировка HTML-таблицы
+
+
+## Docker Compose
+
+- Для Docker-запуска нужны работающий Linux-движок и Compose
+
+Команда из каталога homeworks/01_log_analyzer:
+
+```shell
+docker compose run --build --rm analyzer
+```
+
+### Подключения
+| На компьютере      | В контейнере                       |
+|--------------------|------------------------------------|
+| tests/sample       | /data/logs, только чтение          |
+| config.docker.json | /config/config.json, только чтение |
+| reports/docker     | /data/reports, запись разрешена    |
+
+- Результат - reports/docker/report-2017.06.29.html, сохраняется после удаления контейнера
+

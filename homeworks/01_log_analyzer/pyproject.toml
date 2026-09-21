@@ -7,7 +7,11 @@ dependencies = [
 ]
 
 [tool.poetry]
-package-mode = false
+package-mode = true
+packages = [{ include = "log_analyzer.py" }]
+include = [
+    { path = "templates", format = ["sdist", "wheel"]}
+]
 
 [dependency-groups]
 dev = [
@@ -33,3 +37,10 @@ disallow_untyped_defs = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[project.scripts]
+log-analyzer = "log_analyzer:cli"
+
+[build-system]
+requires = ["poetry-core>=2.2.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
