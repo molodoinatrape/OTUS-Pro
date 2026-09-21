@@ -246,8 +246,8 @@ def parse_args(
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path(__file__).resolve().with_name("config.json"),
-        help="Путь к конфигурации",
+        default=Path("config.json"),
+        help="Путь к конфигурации. " "По умолчанию ищется в текущем рабочем каталоге",
     )
 
     return parser.parse_args(argv)

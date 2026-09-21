@@ -375,11 +375,13 @@ def test_validate_parse_threshold() -> None:
             validate_overrides({"PARSE_ERROR_THRESHOLD": threshold})
 
 
-def test_parse_args_default() -> None:
-    args = parse_args([])
-    expected = Path(__file__).resolve().parent.parent / "config.json"
+def test_parse_args_default(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
 
-    assert args.config == expected
+    args = parse_args([])
+    expected = tmp_path / "config.json"
+
+    assert args.config.resolve() == expected
 
 
 def test_parse_args_custom() -> None:
