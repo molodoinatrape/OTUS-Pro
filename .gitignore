@@ -12,3 +12,4 @@ htmlcov/
 /homeworks/01_log_analyzer/logs/
 /homeworks/01_log_analyzer/reports/
 /homeworks/01_log_analyzer/.venv
+/homeworks/01_log_analyzer/dist
