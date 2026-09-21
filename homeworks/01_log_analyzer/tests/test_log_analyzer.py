@@ -1,4 +1,5 @@
 import gzip
+import json
 from datetime import date
 from pathlib import Path
 
@@ -9,9 +10,11 @@ from log_analyzer import (
     LogFile,
     build_statistics,
     calculate_metrics,
+    config,
     find_latest_log,
     group_endpoints,
     iter_logs,
+    main,
     merge_config,
     parse_args,
     parse_line,
@@ -238,11 +241,14 @@ def test_find_latest_log_ignores_invalid(tmp_path: Path) -> None:
 
 def test_iter_logs(tmp_path: Path) -> None:
     content = example_valid_line + "\nbroken line\n"
-    (tmp_path / "sample.log").touch()
-    (tmp_path / "sample.log.gz").touch()
 
     plain_path = tmp_path / "sample.log"
     gzip_path = tmp_path / "sample.log.gz"
+    empty_path = tmp_path / "empty.log"
+
+    plain_path.touch()
+    gzip_path.touch()
+    empty_path.touch()
 
     plain_path.write_text(content, encoding="utf-8")
 
@@ -261,10 +267,20 @@ def test_iter_logs(tmp_path: Path) -> None:
         is_gzip=True,
     )
 
+    empty_log = LogFile(
+        path=empty_path,
+        log_date=date(2017, 6, 29),
+        is_gzip=False,
+    )
+
     expected = [("/api/v2/banner/25019354", 0.39)]
 
     assert list(iter_logs(plain_log)) == expected
     assert list(iter_logs(gzip_log)) == expected
+    assert list(iter_logs(empty_log)) == []
+
+    with pytest.raises(ValueError):
+        list(iter_logs(plain_log, error_threshold=0.4))
 
 
 def test_merge_config() -> None:
@@ -342,6 +358,22 @@ def test_validate_config() -> None:
     with pytest.raises(ValueError):
         validate_overrides({"REPORT_SIZE": 10, "UNKNOWN": 1})
 
+    with pytest.raises(ValueError):
+        validate_overrides({"UNKNOWN": 0.5})
+
+
+def test_validate_parse_threshold() -> None:
+    for threshold in (0, 0.5, 1):
+        data = {"PARSE_ERROR_THRESHOLD": threshold}
+
+        result = validate_overrides(data)
+
+        assert result == data
+
+    for threshold in (-0.1, 1.1, "0.5", True):
+        with pytest.raises(ValueError):
+            validate_overrides({"PARSE_ERROR_THRESHOLD": threshold})
+
 
 def test_parse_args_default() -> None:
     args = parse_args([])
@@ -418,3 +450,72 @@ def test_process_log(tmp_path: Path) -> None:
     assert report.endswith(";</script>")
     assert report_path == tmp_path / "reports" / "report-2017.06.30.html"
     assert report_path is not None
+
+
+def test_write_report_preserves_existing_on_error(tmp_path: Path, monkeypatch) -> None:
+    script_path = tmp_path / "jquery.tablesorter.min.js"
+    script_path.write_text("// test script", encoding="utf-8")
+
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+
+    report_path = report_dir / "report-2017.06.30.html"
+    report_path.write_text("старый отчёт", encoding="utf-8")
+
+    original_write = Path.write_text
+
+    def failing_write(self, text, encoding="utf-8"):
+        original_write(self, "обрыв", encoding=encoding)
+
+        raise OSError("Ошибка записи")
+
+    monkeypatch.setattr(Path, "write_text", failing_write)
+
+    with pytest.raises(OSError):
+        write_report(
+            report_dir,
+            date(2017, 6, 30),
+            "<html>Новый отчёт</html>",
+            script_path=script_path,
+        )
+
+    assert report_path.read_text(encoding="utf-8") == "старый отчёт"
+
+
+def test_main_parse_error_threshold(tmp_path: Path, capsys) -> None:
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+
+    logs_path = log_dir / "nginx-access-ui.log-20170630"
+    logs_path.write_text(example_valid_line + "\nbroken line\n", encoding="utf-8")
+
+    report_dir = tmp_path / "reports"
+    config_path = tmp_path / "config.json"
+
+    json_config = json.dumps(
+        {
+            "LOG_DIR": str(log_dir),
+            "REPORT_DIR": str(report_dir),
+            "PARSE_ERROR_THRESHOLD": 0.4,
+        }
+    )
+
+    config_path.write_text(json_config, encoding="utf-8")
+
+    exit_code = main(
+        defaults=config,
+        argv=["--config", str(config_path)],
+    )
+
+    assert exit_code == 1
+
+    report_path = report_dir / "report-2017.06.30.html"
+    assert not report_path.exists()
+
+    output = capsys.readouterr().out
+    events = [json.loads(line) for line in output.splitlines()]
+
+    assert any(
+        event.get("level") == "error" and "Превышен порог" in event.get("exception", "")
+        for event in events
+    )

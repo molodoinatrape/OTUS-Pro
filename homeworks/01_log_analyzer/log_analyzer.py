@@ -14,10 +14,11 @@ from typing import TextIO
 
 import structlog
 
-config: dict[str, str | int] = {
+config: dict[str, str | int | float] = {
     "LOG_DIR": "logs",
     "REPORT_DIR": "reports",
     "REPORT_SIZE": 1000,
+    "PARSE_ERROR_THRESHOLD": 0.5,
 }
 
 
@@ -29,9 +30,9 @@ class LogFile:
 
 
 def merge_config(
-    defaults: dict[str, str | int],
-    overrides: dict[str, str | int],
-) -> dict[str, str | int]:
+    defaults: dict[str, str | int | float],
+    overrides: dict[str, str | int | float],
+) -> dict[str, str | int | float]:
     new_config = defaults.copy()
     new_config.update(overrides)
 
@@ -53,8 +54,8 @@ def read_config(path: Path) -> dict[str, object]:
 
 def validate_overrides(
     data: dict[str, object],
-) -> dict[str, str | int]:
-    valid_config: dict[str, str | int] = {}
+) -> dict[str, str | int | float]:
+    valid_config: dict[str, str | int | float] = {}
 
     for key, value in data.items():
         if (
@@ -64,6 +65,13 @@ def validate_overrides(
         ):
             valid_config[key] = value
         elif key == "REPORT_SIZE" and type(value) is int and value > 0:
+            valid_config[key] = value
+        elif (
+            key == "PARSE_ERROR_THRESHOLD"
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and (0 <= value <= 1)
+        ):
             valid_config[key] = value
         else:
             raise ValueError(f"Недопустимое значение {key}")
@@ -200,7 +208,12 @@ def find_latest_log(log_dir: Path) -> LogFile | None:
     )
 
 
-def iter_logs(log: LogFile) -> Generator[tuple[str, float], None, None]:
+def iter_logs(
+    log: LogFile, error_threshold: float = 0.5
+) -> Generator[tuple[str, float], None, None]:
+    count_lines: int = 0
+    count_errors: int = 0
+
     if log.is_gzip:
         opener = gzip.open(log.path, "rt", encoding="utf-8")
     else:
@@ -208,9 +221,21 @@ def iter_logs(log: LogFile) -> Generator[tuple[str, float], None, None]:
 
     with opener as file:
         for line in file:
+            count_lines += 1
             result = parse_line(line)
-            if result is not None:
+            if result is None:
+                count_errors += 1
+            else:
                 yield result
+
+        if count_lines > 0:
+            errors = count_errors / count_lines
+
+            if errors > error_threshold:
+                raise ValueError(
+                    f"{count_errors} ошибок в {count_lines}. "
+                    f"Превышен порог {error_threshold}"
+                )
 
 
 def parse_args(
@@ -271,7 +296,11 @@ def write_report(
         report_dir / "jquery.tablesorter.min.js",
     )
 
-    report_path.write_text(html, encoding="utf-8")
+    tmp_path = report_path.with_suffix(".tmp")
+
+    tmp_path.write_text(html, encoding="utf-8")
+
+    tmp_path.replace(report_path)
 
     return report_path
 
@@ -281,6 +310,7 @@ def process_log(
     report_dir: Path,
     report_size: int,
     template_path: Path,
+    error_threshold: float = 0.5,
 ) -> Path | None:
     """Основная обработка лога"""
 
@@ -289,7 +319,12 @@ def process_log(
     if latest_log is None:
         return None
 
-    with closing(iter_logs(latest_log)) as records:
+    report_path = report_dir / latest_log.log_date.strftime("report-%Y.%m.%d.html")
+
+    if report_path.is_file():
+        return report_path
+
+    with closing(iter_logs(latest_log, error_threshold=error_threshold)) as records:
         endpoints = group_endpoints(records)
 
     statistics = build_statistics(endpoints, report_size)
@@ -309,7 +344,7 @@ def process_log(
 
 
 def main(
-    defaults: dict[str, str | int],
+    defaults: dict[str, str | int | float],
     argv: list[str] | None = None,
 ) -> int:
     setup_logging()
@@ -346,6 +381,7 @@ def main(
         log_dir = final_config["LOG_DIR"]
         report_dir = final_config["REPORT_DIR"]
         report_size = final_config["REPORT_SIZE"]
+        error_threshold = final_config["PARSE_ERROR_THRESHOLD"]
 
         if not isinstance(log_dir, str):
             raise ValueError("LOG_DIR должен быть строкой")
@@ -356,17 +392,30 @@ def main(
         if not isinstance(report_size, int) or isinstance(report_size, bool):
             raise ValueError("REPORT_SIZE должен быть целым числом")
 
-        report_path = process_log(
-            log_dir=Path(log_dir),
-            report_dir=Path(report_dir),
-            report_size=report_size,
-            template_path=Path(__file__).resolve().parent / "templates" / "report.html",
-        )
+        if (
+            isinstance(error_threshold, float | int)
+            and not isinstance(error_threshold, bool)
+            and 0 <= error_threshold <= 1
+        ):
+            report_path = process_log(
+                log_dir=Path(log_dir),
+                report_dir=Path(report_dir),
+                report_size=report_size,
+                template_path=Path(__file__).resolve().parent
+                / "templates"
+                / "report.html",
+                error_threshold=error_threshold,
+            )
 
-        if report_path is None:
-            logger.info("Подходящих логов не найдено")
+            if report_path is None:
+                logger.info("Подходящих логов не найдено")
+            else:
+                logger.info("Отчёт доступен", report_path=str(report_path))
+
         else:
-            logger.info("Отчёт создан", report_path=str(report_path))
+            raise ValueError(
+                f"{error_threshold} должно быть только int или float и между 0 и 1"
+            )
 
     except (Exception, KeyboardInterrupt) as original_error:
         try:
@@ -405,5 +454,10 @@ def setup_logging(stream: TextIO | None = None) -> None:
     )
 
 
+def cli() -> int:
+    result = main(config)
+    return result
+
+
 if __name__ == "__main__":
-    raise SystemExit(main(config))
+    raise SystemExit(cli())
