@@ -19,4 +19,4 @@ class SubclassOfFoo(Foo):
 f: Foo = Foo().return_self()
 sf: SubclassOfFoo = SubclassOfFoo().return_self()
 
-sf: SubclassOfFoo = Foo().return_self()  # expect-type-error
+sf: SubclassOfFoo = Foo().return_self()  # pyright: ignore[reportAssignmentType]

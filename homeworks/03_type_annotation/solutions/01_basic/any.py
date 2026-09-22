@@ -12,4 +12,4 @@ def foo(x: Any):
 
 foo(1)
 foo("10")
-foo(1, 2)  # ожидается TypeError
+foo(1, 2)  # pyright: ignore[reportCallIssue]

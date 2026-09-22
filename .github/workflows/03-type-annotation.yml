@@ -1,0 +1,23 @@
+name: Проверка аннотаций типов
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: homeworks/03_type_annotation
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Собрать образ Docker
+        run: docker compose -p otus-types -f docker_compose.yaml build otus-python-pro-homework2
+
+      - name: Типизация
+        run: make typing

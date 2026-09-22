@@ -11,4 +11,4 @@ def foo(x: str | int):
 foo("foo")
 foo(1)
 
-foo([])  # expect-type-error
+foo([])  # pyright: ignore[reportArgumentType]

@@ -16,7 +16,7 @@ def execute_query(sql: LiteralString, parameters: Iterable[str] = ...):
 
 def query_user(user_id: str):
     query = f"SELECT * FROM data WHERE user_id = {user_id}"
-    execute_query(query)  # expect-type-error
+    execute_query(query)  # pyright: ignore[reportArgumentType]
 
 
 def query_data(user_id: str, limit: bool) -> None:

@@ -33,5 +33,5 @@ def new_name(name: str) -> str:
 
 accept_single_string_input(string_name)
 accept_single_string_input(string_value)
-accept_single_string_input(int_value)  # expect-type-error
-accept_single_string_input(new_name)  # expect-type-error
+accept_single_string_input(int_value)  # pyright: ignore[reportArgumentType]
+accept_single_string_input(new_name)  # pyright: ignore[reportArgumentType]

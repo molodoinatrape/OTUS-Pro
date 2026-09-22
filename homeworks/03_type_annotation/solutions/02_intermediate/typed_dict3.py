@@ -31,4 +31,4 @@ a: Person = {
 }
 a: Person = {"name": "Capy"}
 # fmt: off
-a: Person = {"age": 1, "gender": "Male", "address": "", "email": ""} # expect-type-error
+a: Person = {"age": 1, "gender": "Male", "address": "", "email": ""} # pyright: ignore[reportAssignmentType]

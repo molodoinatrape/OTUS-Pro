@@ -14,4 +14,4 @@ foo("left")
 foo("right")
 
 a = "".join(["l", "e", "f", "t"])
-foo(a)  # expect-type-error
+foo(a)  # pyright: ignore[reportArgumentType]

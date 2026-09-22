@@ -25,5 +25,5 @@ async def async_function2() -> str:
 
 
 run_async(async_function())
-run_async(1)  # expect-type-error
-run_async(async_function2())  # expect-type-error
+run_async(1)  # pyright: ignore[reportArgumentType]
+run_async(async_function2())  # pyright: ignore[reportArgumentType]

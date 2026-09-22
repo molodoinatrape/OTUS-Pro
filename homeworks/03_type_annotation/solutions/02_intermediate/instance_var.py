@@ -12,4 +12,4 @@ class Foo:
 
 foo = Foo()
 foo.bar = 1
-foo.bar = "1"  # expect-type-error
+foo.bar = "1"  # pyright: ignore[reportAttributeAccessIssue]

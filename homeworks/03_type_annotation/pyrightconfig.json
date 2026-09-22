@@ -1,0 +1,6 @@
+{
+  "include": ["solutions/01_basic", "solutions/02_intermediate"],
+  "pythonVersion": "3.14",
+  "typeCheckingMode": "standard",
+  "reportUnnecessaryTypeIgnoreComment": "error"
+}
