@@ -1,15 +1,18 @@
-# OTUS-Pro - Python-разработчик. Продвинутый уровень.
+# OTUS-Pro
 
-Репозиторий для ведения работы с курсом и хранением домашних заданий.
+Домашние задания курса OTUS «Python-разработчик. Продвинутый уровень».
 
-## ДЗ
+| Тема | Проект |
+|---|---|
+| 01. Анализ логов | [Анализатор nginx-логов](homeworks/01_log_analyzer/README.md): статистика URL, HTML-отчёт, тесты |
+| 02. Дистрибуция и развёртывание | [Сборка sdist и wheel](homeworks/01_log_analyzer/README.md), установка пакета и Docker Compose на примере анализатора |
+| 03. Аннотации типов | [Python Type Challenges](homeworks/03_type_annotation/README.md): Basic и Intermediate, проверка Pyright в Docker |
 
-|  № | Проект                                                  | Описание            |
-|----|---------------------------------------------------------|---------------------|
-| 01 | [Анализатор логов](homeworks/01_log_analyzer/README.md) | Статистика запросов |
+Инструкции запуска и требования находятся в README каждого проекта.
 
-## Структура
+## CI
 
-Каждое ДЗ находится в отдельном каталоге _homeworks_ и имеет собственные зависимости, настройки и README.
+Проверки запускаются при `push` и `pull_request`:
 
-Общие настройки pre-commit и GitHub Actions находятся в корне репозитория.
+- [Анализатор логов](.github/workflows/01-log-analyzer.yml): проверка Poetry, lint и pytest.
+- [Аннотации типов](.github/workflows/03-type-annotation.yml): сборка Docker-образа и `make typing`.
