@@ -1,0 +1,9 @@
+services:
+  otus-python-pro-homework2:
+    #environment:
+    #- PATH=/root/.pyenv/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '8001:8001'
