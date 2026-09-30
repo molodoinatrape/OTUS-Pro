@@ -1,5 +1,5 @@
 .idea
-docs
+docs&practice
 *.py[cod]
 .venv/
 __pycache__/

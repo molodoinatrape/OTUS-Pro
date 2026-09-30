@@ -1,0 +1,35 @@
+@host = http://localhost:8080
+@token = 9dc1a0d136748c1becca284bab940a63a21bf55d37667b2afe9949cda228c6b25ec64a1c3fe2ea134b6f4cdfe7dc79deed8a7d1e2454cc483077d9b85b872f93
+
+### Скоринг
+POST {{host}}/method
+Content-Type: application/json
+
+{
+    "login": "user",
+    "token": "{{token}}",
+    "method": "online_score",
+    "arguments": {
+      "phone": "79991234567",
+      "email": "user@example.com"
+    }
+}
+
+### Интересы клиентов
+POST {{host}}/method
+Content-Type: application/json
+
+{
+    "login": "user",
+    "token": "{{token}}",
+    "method": "clients_interests",
+    "arguments": {
+      "client_ids": [1, 2]
+    }
+}
+
+### Без обязательных полей - 422
+POST {{host}}/method
+Content-Type: application/json
+
+{}

@@ -7,6 +7,7 @@
 | 01. Анализ логов | [Анализатор nginx-логов](homeworks/01_log_analyzer/README.md): статистика URL, HTML-отчёт, тесты |
 | 02. Дистрибуция и развёртывание | [Сборка sdist и wheel](homeworks/01_log_analyzer/README.md), установка пакета и Docker Compose на примере анализатора |
 | 03. Аннотации типов | [Python Type Challenges](homeworks/03_type_annotation/README.md): Basic и Intermediate, проверка Pyright в Docker |
+| 06. ООП | [Scoring API](homeworks/06_API_scoring/README.md): валидация запросов, авторизация, скоринг, интересы клиентов и тесты |
 
 Инструкции запуска и требования находятся в README каждого проекта.
 
