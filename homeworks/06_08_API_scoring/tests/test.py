@@ -4,25 +4,27 @@ import datetime
 import functools
 import hashlib
 import unittest
+from copy import deepcopy
+from unittest.mock import Mock
 
 import api
+from store import Store
 
 
 def cases(cases):
-    """Создаёт декоратор для повторения одного теста с разными данными.
-    Весь список считается одним тестовым методом. Первая ошибка прерывает цикл.
-    """
+    """Запускает наборы данных с отдельным subTest для каждого случая."""
+
     def decorator(f):
-        """Получает исходный тестовый метод и возвращает его обёртку."""
+        """Создаёт обёртку тестового метода."""
+
         @functools.wraps(f)
         def wrapper(*args):
-            """Вызывает исходный метод для каждого сценария, сохраняя self.
-            Словарь передаёт одним аргументом, кортеж — отдельными аргументами.
-            setUp между сценариями не вызывается.
-            """
-            for c in cases:
-                new_args = args + (c if isinstance(c, tuple) else (c,))
-                f(*new_args)
+            """Вызывает тест для каждого набора данных с копией входа."""
+            for index, case in enumerate(cases):
+                with args[0].subTest(case=index, data=case):
+                    data = deepcopy(case)
+                    new_args = args + (data if isinstance(data, tuple) else (data,))
+                    f(*new_args)
 
         return wrapper
 
@@ -30,22 +32,27 @@ def cases(cases):
 
 
 class TestSuite(unittest.TestCase):
-    """Тесты проверки данных, токенов и результатов обоих методов API."""
+    """Проверки запросов, авторизации и результатов методов API."""
 
     def setUp(self):
-        """Создаёт пустые служебные словари перед каждым тестовым методом."""
+        """Создаёт контекст, заголовки и Mock хранилища."""
         self.context = {}
         self.headers = {}
-        self.settings = {}
+        self.store = Mock(spec=Store)
+        self.store.cache_get.return_value = None
+        self.store.cache_set.return_value = True
+        self.store.get.return_value = '["books", "music"]'
 
     def get_response(self, request):
-        """Передаёт запрос напрямую в method_handler и возвращает результат и код."""
+        """Очищает контекст и вызывает method_handler."""
+        self.context.clear()
+        self.store.reset_mock()
         return api.method_handler(
-            {"body": request, "headers": self.headers}, self.context, self.settings
+            {"body": request, "headers": self.headers}, self.context, self.store
         )
 
     def set_valid_auth(self, request):
-        """Добавляет в переданный словарь правильный токен для его логина."""
+        """Добавляет правильный токен в словарь запроса."""
         if request.get("login") == api.ADMIN_LOGIN:
             request["token"] = hashlib.sha512(
                 (datetime.datetime.now().strftime("%Y%m%d%H") + api.ADMIN_SALT).encode(
@@ -54,7 +61,7 @@ class TestSuite(unittest.TestCase):
             ).hexdigest()
         else:
             msg = (
-                    request.get("account", "") + request.get("login", "") + api.SALT
+                request.get("account", "") + request.get("login", "") + api.SALT
             ).encode("utf-8")
             request["token"] = hashlib.sha512(msg).hexdigest()
 
@@ -157,28 +164,34 @@ class TestSuite(unittest.TestCase):
 
     @cases(
         [
-            {"phone": "79175002040", "email": "stupnikov@otus.ru"},
-            {"phone": 79175002040, "email": "stupnikov@otus.ru"},
-            {
-                "gender": 1,
-                "birthday": "01.01.2000",
-                "first_name": "a",
-                "last_name": "b",
-            },
-            {"gender": 0, "birthday": "01.01.2000"},
-            {"gender": 2, "birthday": "01.01.2000"},
-            {"first_name": "a", "last_name": "b"},
-            {
-                "phone": "79175002040",
-                "email": "stupnikov@otus.ru",
-                "gender": 1,
-                "birthday": "01.01.2000",
-                "first_name": "a",
-                "last_name": "b",
-            },
+            ({"phone": "79175002040", "email": "stupnikov@otus.ru"}, 3.0),
+            ({"phone": 79175002040, "email": "stupnikov@otus.ru"}, 3.0),
+            (
+                {
+                    "gender": 1,
+                    "birthday": "01.01.2000",
+                    "first_name": "a",
+                    "last_name": "b",
+                },
+                2.0,
+            ),
+            ({"gender": 0, "birthday": "01.01.2000"}, 1.5),
+            ({"gender": 2, "birthday": "01.01.2000"}, 1.5),
+            ({"first_name": "a", "last_name": "b"}, 0.5),
+            (
+                {
+                    "phone": "79175002040",
+                    "email": "stupnikov@otus.ru",
+                    "gender": 1,
+                    "birthday": "01.01.2000",
+                    "first_name": "a",
+                    "last_name": "b",
+                },
+                5.0,
+            ),
         ]
     )
-    def test_ok_score_request(self, arguments):
+    def test_ok_score_request(self, arguments, expected):
         request = {
             "account": "horns&hoofs",
             "login": "h&f",
@@ -189,7 +202,7 @@ class TestSuite(unittest.TestCase):
         response, code = self.get_response(request)
         self.assertEqual(api.OK, code, arguments)
         score = response.get("score")
-        self.assertTrue(isinstance(score, (int, float)) and score >= 0, arguments)
+        self.assertEqual(score, expected, arguments)
         self.assertEqual(sorted(self.context["has"]), sorted(arguments.keys()))
 
     def test_ok_score_admin_request(self):
@@ -205,6 +218,8 @@ class TestSuite(unittest.TestCase):
         self.assertEqual(api.OK, code)
         score = response.get("score")
         self.assertEqual(score, 42)
+        self.store.cache_get.assert_not_called()
+        self.store.cache_set.assert_not_called()
 
     @cases(
         [
@@ -258,6 +273,10 @@ class TestSuite(unittest.TestCase):
             )
         )
         self.assertEqual(self.context.get("nclients"), len(arguments["client_ids"]))
+        self.assertEqual(
+            response,
+            {client_id: ["books", "music"] for client_id in arguments["client_ids"]},
+        )
 
     def test_unknown_method(self):
         request = {

@@ -1,22 +1,28 @@
-"""Проверка данных запроса, проверка токена и отправка ответа через HTTP."""
+"""HTTP API: проверка запросов, авторизация и ответы в JSON."""
 
 import datetime
 import hashlib
 import json
 import logging
 import re
-import uuid
 import sys
+import uuid
 from argparse import ArgumentParser
 from email.message import Message
 from enum import Enum
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Callable, cast
-from scoring import get_score, get_interests
+
+import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
+
+from scoring import get_interests, get_score
+from store import Store
 
 
 class Gender(Enum):
-    """Коды пола: 0 — неизвестен, 1 — мужской, 2 — женский."""
+    """Коды пола: 0 - неизвестен, 1 - мужской и 2 - женский."""
 
     UNKNOWN = 0
     MALE = 1
@@ -24,6 +30,8 @@ class Gender(Enum):
 
 
 class ErrorMessage(Enum):
+    """Сообщения для кодов ошибок HTTP."""
+
     BAD_REQUEST = "Bad Request"
     FORBIDDEN = "Forbidden"
     NOT_FOUND = "Not Found"
@@ -52,10 +60,9 @@ ERRORS = {
 
 
 class Field:
-    """Общие правила для одного поля: обязательность и допустимость пустоты."""
+    """Общие проверки обязательности и пустого значения поля."""
 
     def __init__(self, required: bool = False, nullable: bool = False):
-        """Сохраняет настройки поля; отсутствие ключа проверяет BaseRequest."""
         self.required = required
         self.nullable = nullable
 
@@ -66,7 +73,7 @@ class Field:
         return False
 
     def validate_value(self, value):
-        """Место для проверки непустого значения; её задаёт дочерний класс."""
+        """Проверяется в подклассе для каждого типа поля."""
         raise NotImplementedError()
 
     def validate(self, value):
@@ -79,7 +86,7 @@ class Field:
 
 
 class CharField(Field):
-    """Поле со строковым значением."""
+    """Строковое поле."""
 
     def validate_value(self, value):
         if not isinstance(value, str):
@@ -89,7 +96,7 @@ class CharField(Field):
 
 
 class ArgumentsField(Field):
-    """Словарь параметров выбранного метода API."""
+    """Словарь аргументов метода API."""
 
     def is_empty(self, value) -> bool:
         if value in ({}, None):
@@ -105,8 +112,6 @@ class ArgumentsField(Field):
 
 
 class EmailField(CharField):
-    """Строка email с простой проверкой наличия символа @."""
-
     def validate_value(self, value):
         value = super().validate_value(value)
 
@@ -117,7 +122,7 @@ class EmailField(CharField):
 
 
 class PhoneField(Field):
-    """Телефон из 11 цифр, начинающийся с 7."""
+    """Телефон из 11 цифр с первой цифрой 7."""
 
     def validate_value(self, value):
         if type(value) not in (str, int):
@@ -125,16 +130,18 @@ class PhoneField(Field):
 
         value = str(value)
 
-        if (not value.startswith("7")
-                or len(value) != 11
-                or not all("0" <= char <= "9" for char in value)):
+        if (
+            not value.startswith("7")
+            or len(value) != 11
+            or not all("0" <= char <= "9" for char in value)
+        ):
             raise ValueError("Value must be phone number")
 
         return value
 
 
 class DateField(Field):
-    """Дата, переданная строкой в формате DD.MM.YYYY."""
+    """Дата в формате DD.MM.YYYY."""
 
     def validate_value(self, value):
         if not isinstance(value, str):
@@ -149,10 +156,10 @@ class DateField(Field):
 
 
 class BirthDayField(DateField):
-    """Дата рождения человека с возрастом не больше 70 полных лет."""
+    """Дата рождения с возрастом не больше 70 полных лет."""
 
     def validate_value(self, value):
-        """Проверяет дату, запрещает будущее и возраст больше 70 полных лет."""
+        """Проверяет дату рождения, возраст и отсутствие будущей даты."""
         value = super().validate_value(value)
         today = datetime.date.today()
 
@@ -174,7 +181,7 @@ class GenderField(Field):
     """Целочисленный код пола: 0, 1 или 2."""
 
     def validate_value(self, value):
-        """Принимает только целые 0, 1, 2; True и False не допускаются."""
+        """Принимает целые 0, 1 и 2, но не bool."""
         if value not in (0, 1, 2) or type(value) is not int:
             raise ValueError("Value must be 0, 1 or 2")
 
@@ -185,30 +192,26 @@ class ClientIDsField(Field):
     """Список целочисленных ID клиентов."""
 
     def is_empty(self, value) -> bool:
-        """Считает None и пустой список пустыми значениями."""
+        """Проверяет None и пустой список."""
         if value in ([], None):
             return True
 
         return False
 
     def validate_value(self, value):
-        """Проверяет список целых чисел; значения bool не допускаются."""
-        if (not isinstance(value, list)
-                or not all(type(item) is int for item in value)):
+        """Проверяет список целых чисел без bool."""
+        if not isinstance(value, list) or not all(type(item) is int for item in value):
             raise ValueError("Value must be a list and all elements are int")
 
         return value
 
 
 class BaseRequest:
-    """Проверяет объявленные поля и хранит значения и ошибки одного запроса."""
+    """Проверяет поля запроса и сохраняет значения и ошибки."""
 
     @classmethod
     def get_fields(cls):
-        """Собирает поля класса и его родителей.
-        Объявление потомка заменяет одноимённое объявление родителя.
-        В результате остаются только атрибуты, содержащие объекты Field.
-        """
+        """Собирает поля класса и родителей с учётом переопределений."""
         attributes = {}
 
         for base in reversed(cls.__mro__):
@@ -223,10 +226,7 @@ class BaseRequest:
         return fields
 
     def __init__(self, data):
-        """Проверяет входной словарь и записывает значения в атрибуты экземпляра.
-        Отсутствующие поля получают None. Ошибки сохраняются строками в errors.
-        Неизвестные входные ключи не становятся атрибутами экземпляра.
-        """
+        """Проверяет входные поля и записывает ошибки в errors."""
         self.data = data
         self.errors = {}
 
@@ -246,14 +246,14 @@ class BaseRequest:
 
 
 class ClientsInterestsRequest(BaseRequest):
-    """Параметры интересов: обязательный список ID и необязательная дата."""
+    """Запрос интересов с обязательным списком ID клиентов."""
 
     client_ids = ClientIDsField(required=True)
     date = DateField(required=False, nullable=True)
 
 
 class OnlineScoreRequest(BaseRequest):
-    """Параметры скоринга с проверкой наличия хотя бы одной полной пары."""
+    """Запрос оценки с хотя бы одной полной парой аргументов."""
 
     first_name = CharField(required=False, nullable=True)
     last_name = CharField(required=False, nullable=True)
@@ -263,28 +263,22 @@ class OnlineScoreRequest(BaseRequest):
     gender = GenderField(required=False, nullable=True)
 
     def __init__(self, data):
-        """Проверяет поля, затем пары: телефон/email, имя/фамилия, пол/дата рождения.
-        Если нет ни одной полной пары, добавляет ошибку в errors.
-        Код пола 0 считается заполненным значением.
-        """
+        """Проверяет поля и пары аргументов, включая gender=0."""
         super().__init__(data)
 
         if self.errors:
             return
 
-        has_contacts = (
-            self.phone not in (None, "")
-            and self.email not in (None, "")
+        has_contacts = self.phone not in (None, "") and self.email not in (None, "")
+
+        has_name = self.first_name not in (None, "") and self.last_name not in (
+            None,
+            "",
         )
 
-        has_name = (
-            self.first_name not in (None, "")
-            and self.last_name not in (None, "")
-        )
-
-        has_birth_info = (
-            self.birthday not in (None, "")
-            and self.gender not in (None, "")
+        has_birth_info = self.birthday not in (None, "") and self.gender not in (
+            None,
+            "",
         )
 
         if not (has_contacts or has_name or has_birth_info):
@@ -295,7 +289,7 @@ class OnlineScoreRequest(BaseRequest):
 
 
 class MethodRequest(BaseRequest):
-    """Общая часть запроса: аккаунт, логин, токен, метод и его параметры."""
+    """Аккаунт, логин, токен, метод и аргументы запроса."""
 
     account = CharField(required=False, nullable=True)
     login = CharField(required=True, nullable=True)
@@ -305,16 +299,12 @@ class MethodRequest(BaseRequest):
 
     @property
     def is_admin(self) -> bool:
-        """Показывает, равен ли логин admin; правильность токена не проверяет."""
+        """Проверяет, указан ли логин admin."""
         return self.login == ADMIN_LOGIN
 
 
 def check_auth(request: MethodRequest) -> bool:
-    """Сравнивает переданный токен с ожидаемым хешем SHA-512.
-    Для обычного пользователя хеширует account + login + SALT.
-    Для admin хеширует текущий час в формате YYYYMMDDHH + ADMIN_SALT.
-    Вызывается после проверки полей запроса.
-    """
+    """Проверяет токен пользователя или часовой токен admin."""
     if request.is_admin:
         digest = hashlib.sha512(
             (datetime.datetime.now().strftime("%Y%m%d%H") + ADMIN_SALT).encode("utf-8")
@@ -323,22 +313,16 @@ def check_auth(request: MethodRequest) -> bool:
         account = cast(str | None, cast(object, request.account)) or ""
         login = cast(str | None, cast(object, request.login)) or ""
 
-        digest = hashlib.sha512(
-            (account + login + SALT).encode("utf-8")
-        ).hexdigest()
+        digest = hashlib.sha512((account + login + SALT).encode("utf-8")).hexdigest()
     return digest == request.token
 
 
 def method_handler(
     request: dict[str, Any],
     ctx: dict[str, Any],
-    settings=None,
+    store,
 ) -> tuple[dict[str, Any] | str, int]:
-    """Проверяет тело и токен, затем вызывает обработчик выбранного метода.
-    request содержит body и headers. ctx — общий словарь для логирования.
-    Возвращает пару: результат или ошибка, затем код HTTP.
-    settings оставлен для совместимости с тестами и пока не используется.
-    """
+    """Проверяет запрос и авторизацию, затем вызывает обработчик метода."""
     body = request.get("body")
 
     if not isinstance(body, dict):
@@ -353,18 +337,19 @@ def method_handler(
         return "Forbidden", FORBIDDEN
 
     if method_request.method == "online_score":
-        return handle_online_score(method_request, ctx)
+        return handle_online_score(method_request, ctx, store)
     elif method_request.method == "clients_interests":
-        return handle_clients_interests(method_request, ctx)
+        return handle_clients_interests(method_request, ctx, store)
     else:
         return "Unknown method", NOT_FOUND
 
 
-def handle_online_score(method_request, ctx):
-    """Проверяет параметры и возвращает оценку вместе с кодом HTTP.
-    В ctx['has'] записывает имена непустых полей. Для admin оценка равна 42,
-    для остальных её вычисляет get_score. Токен проверяется до этого вызова.
-    """
+def handle_online_score(
+    method_request,
+    ctx,
+    store,
+):
+    """Возвращает оценку и код ответа, записывает заполненные поля в ctx."""
     arguments = method_request.arguments
 
     if arguments is None:
@@ -393,17 +378,18 @@ def handle_online_score(method_request, ctx):
             gender=score_request.gender,
             first_name=score_request.first_name,
             last_name=score_request.last_name,
+            store=store,
         )
 
     return {"score": score}, OK
 
 
-def handle_clients_interests(method_request, ctx):
-    """Проверяет параметры и возвращает словарь ID — список интересов и код HTTP.
-    В ctx['nclients'] записывает число переданных ID, включая повторы.
-    Повторный ID заменяет предыдущую запись в результате.
-    Поле date проверяется, но в get_interests не передаётся.
-    """
+def handle_clients_interests(
+    method_request,
+    ctx,
+    store,
+):
+    """Возвращает интересы по ID и записывает число ID в ctx."""
     arguments = method_request.arguments
 
     if arguments is None:
@@ -421,7 +407,7 @@ def handle_clients_interests(method_request, ctx):
     client_interests = {}
 
     for client_id in client_ids:
-        interests = get_interests(client_id)
+        interests = get_interests(store, client_id)
 
         client_interests[client_id] = interests
 
@@ -429,14 +415,16 @@ def handle_clients_interests(method_request, ctx):
 
 
 class MainHTTPHandler(BaseHTTPRequestHandler):
-    """Принимает HTTP-запросы и отправляет ответы API в формате JSON."""
+    """Обрабатывает POST-запросы и отправляет ответы в JSON."""
 
     router: dict[str, Callable] = {"method": method_handler}
 
     def get_request_id(self, headers: Message[str, str]) -> str:
+        """Берёт ID запроса из заголовка или создаёт новый."""
         return headers.get("HTTP_X_REQUEST_ID", uuid.uuid4().hex)
 
     def do_POST(self) -> None:
+        """Читает JSON, вызывает обработчик и отправляет ответ HTTP."""
         response, code = {}, OK
         context = {"request_id": self.get_request_id(self.headers)}
         request = None
@@ -454,6 +442,7 @@ class MainHTTPHandler(BaseHTTPRequestHandler):
                     response, code = self.router[path](
                         {"body": request, "headers": self.headers},
                         context,
+                        self.server.store,
                     )
                 except Exception as e:
                     logging.exception("Unexpected error: %s" % e)
@@ -480,9 +469,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     handler = (
-        logging.FileHandler(args.log)
-        if args.log
-        else logging.StreamHandler(sys.stdout)
+        logging.FileHandler(args.log) if args.log else logging.StreamHandler(sys.stdout)
     )
 
     logging.basicConfig(
@@ -492,7 +479,19 @@ if __name__ == "__main__":
         datefmt="%Y.%m.%d %H:%M:%S",
     )
 
+    redis_client = redis.Redis(
+        host="127.0.0.1",
+        port=6379,
+        decode_responses=True,
+        socket_connect_timeout=2,
+        socket_timeout=2,
+        retry=Retry(NoBackoff(), 0),
+    )
+
+    store = Store(redis_client)
+
     server = HTTPServer(("localhost", args.port), MainHTTPHandler)
+    server.store = store
 
     logging.info("Starting server at %s" % args.port)
 
@@ -500,5 +499,6 @@ if __name__ == "__main__":
         server.serve_forever()
     except KeyboardInterrupt:
         pass
-
-    server.server_close()
+    finally:
+        server.server_close()
+        redis_client.close()
