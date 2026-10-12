@@ -141,8 +141,11 @@ def test_bad_auth_does_not_use_store(valid_request, store, redis_client):
     redis_client.set.assert_not_called()
 
 
-def test_unknown_method_does_not_use_store(valid_request, store, redis_client):
-    valid_request["method"] = "unknown"
+@pytest.mark.parametrize(
+    "method", ["unknown", "", None], ids=["unknown", "empty", "none"]
+)
+def test_unknown_method_does_not_use_store(valid_request, store, redis_client, method):
+    valid_request["method"] = method
 
     response, code = api.method_handler({"body": valid_request}, {}, store)
 

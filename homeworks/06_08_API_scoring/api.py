@@ -295,7 +295,7 @@ class MethodRequest(BaseRequest):
     login = CharField(required=True, nullable=True)
     token = CharField(required=True, nullable=True)
     arguments = ArgumentsField(required=True, nullable=True)
-    method = CharField(required=True, nullable=False)
+    method = CharField(required=True, nullable=True)
 
     @property
     def is_admin(self) -> bool:
