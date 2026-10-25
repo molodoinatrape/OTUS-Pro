@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, List, Optional
 
@@ -24,6 +24,11 @@ class TimeSlot:
     def __post_init__(self) -> None:
         if self.start >= self.end:
             raise ValueError("TimeSlot invariant: start must be < end")
+
+    def overlaps(self, other: TimeSlot) -> bool:
+        if self.start < other.end and other.start < self.end:
+            return True
+        return False
 
 
 @dataclass(frozen=True)
@@ -58,10 +63,12 @@ class ReservationStatus(str, Enum):
 class Reservation:
     """
     Entity:
+
     - имеет устойчивую идентичность: id
     - содержит состояние: slot, party_size, table_id, status
     - сама по себе НЕ является границей согласованности.
-      Граница (Aggregate) будет отдельным объектом.
+
+    Граница (Aggregate) будет отдельным объектом.
     """
 
     def __init__(
@@ -79,6 +86,30 @@ class Reservation:
         self.status = status
 
 
+class Table:
+    table_id: TableId
+    capacity: int
+
+    def __init__(self, table_id: TableId, capacity: int) -> None:
+        self._id = table_id
+        if capacity <= 0:
+            raise ValueError("Table capacity must be > 0")
+        self._capacity = capacity
+
+    @property
+    def id(self) -> TableId:
+        return self._id
+
+    @property
+    def capacity(self) -> int:
+        return self._capacity
+
+    def can_fit(self, party_size: PartySize) -> bool:
+        if self.capacity >= party_size.value:
+            return True
+        return False
+
+
 # =============================================================================
 # AGGREGATE
 # =============================================================================
@@ -89,7 +120,7 @@ class Reservation:
 #
 # Чтобы "агрегат менялся через root", мы:
 # - прячем изменения Entity за методами Aggregate
-# - даём наружу root только для чтения (property root)
+# - даём наружу внутреннее состояние только для чтения через свойства
 # =============================================================================
 
 class ReservationAggregate:
@@ -106,17 +137,42 @@ class ReservationAggregate:
         self._root = root
         self.events: List[Any] = []
 
-    # ---------- Root доступен наружу только для чтения ----------
+    # ---------- Внутреннее состояние читается через отдельные свойства ----------
     @property
-    def root(self) -> Reservation:
-        return self._root
+    def id(self) -> str:
+        return self._root.id
+
+    @property
+    def slot(self) -> TimeSlot:
+        return self._root.slot
+
+    @property
+    def party_size(self) -> PartySize:
+        return self._root.party_size
+
+    @property
+    def table_id(self) -> TableId | None:
+        return self._root.table_id
+
+    @property
+    def status(self) -> ReservationStatus:
+        return self._root.status
 
     # ---------- Factory-like constructor (удобно) ----------
     @classmethod
-    def create(cls, reservation_id: str, slot: TimeSlot, party_size: PartySize) -> "ReservationAggregate":
-        root = Reservation(reservation_id=reservation_id, slot=slot, party_size=party_size)
+    def create(
+            cls,
+            reservation_id: str,
+            slot: TimeSlot,
+            party_size: PartySize
+    ) -> "ReservationAggregate":
+        root = Reservation(
+            reservation_id=reservation_id,
+            slot=slot,
+            party_size=party_size
+        )
         agg = cls(root)
-        agg.events.append(ReservationCreated(root.id, datetime.utcnow()))
+        agg.events.append(ReservationCreated(root.id, datetime.now(timezone.utc)))
         return agg
 
     # ---------- Operations (изменяют root и защищают инварианты) ----------
@@ -127,7 +183,9 @@ class ReservationAggregate:
             raise ValueError("Invariant: can assign table only for CREATED reservation")
 
         self._root.table_id = table_id
-        self.events.append(TableAssigned(self._root.id, table_id.value, datetime.utcnow()))
+        self.events.append(
+            TableAssigned(self._root.id, table_id.value, datetime.now(timezone.utc))
+        )
 
     def confirm(self) -> None:
         # Invariant: confirm only from CREATED
@@ -139,7 +197,9 @@ class ReservationAggregate:
             raise ValueError("Invariant: cannot confirm without assigned table")
 
         self._root.status = ReservationStatus.CONFIRMED
-        self.events.append(ReservationConfirmed(self._root.id, datetime.utcnow()))
+        self.events.append(
+            ReservationConfirmed(self._root.id, datetime.now(timezone.utc))
+        )
 
     def cancel(self) -> None:
         # Invariant: cannot cancel COMPLETED
@@ -151,7 +211,9 @@ class ReservationAggregate:
             return
 
         self._root.status = ReservationStatus.CANCELLED
-        self.events.append(ReservationCancelled(self._root.id, datetime.utcnow()))
+        self.events.append(
+            ReservationCancelled(self._root.id, datetime.now(timezone.utc))
+        )
 
     def mark_completed(self) -> None:
         # Invariant: can complete only CONFIRMED

@@ -10,3 +10,8 @@ class CreateReservation:
     slot_start: datetime
     duration_min: int
     party_size: int
+
+
+@dataclass(frozen=True)
+class CancelReservation:
+    reservation_id: str
