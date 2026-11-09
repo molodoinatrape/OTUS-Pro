@@ -1,4 +1,5 @@
 import os
+import time
 import socket
 import signal
 import argparse
@@ -10,25 +11,45 @@ from urllib.parse import urlsplit, unquote
 from concurrent.futures import ThreadPoolExecutor
 
 
-def receive_headers(client_socket, max_header_size=65536) -> bytes:
+def receive_headers(
+        client_socket,
+        max_header_size: int = 65536,
+        header_timeout: float = 5.0,
+) -> bytes:
     """
     Чтение заголовков
     """
     headers = b''
+    original_timeout = client_socket.gettimeout()
+    deadline = time.monotonic() + header_timeout
 
-    while b'\r\n\r\n' not in headers:
-        if len(headers) >= max_header_size:
-            raise ValueError('Превышен лимит размера заголовков')
+    try:
+        while b'\r\n\r\n' not in headers:
+            if len(headers) >= max_header_size:
+                raise ValueError('Превышен лимит размера заголовков')
 
-        chunk = client_socket.recv(min(4096, max_header_size - len(headers)))
-        if chunk == b'':
-            raise ValueError(
-                'Соединение завершено до получения полных заголовков'
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('Истекло время получения заголовков')
+
+            if original_timeout is None:
+                client_socket.settimeout(remaining)
+            else:
+                client_socket.settimeout(min(original_timeout, remaining))
+
+            chunk = client_socket.recv(
+                min(4096, max_header_size - len(headers))
             )
-        headers += chunk
+            if chunk == b'':
+                raise ValueError(
+                    'Соединение завершено до получения полных заголовков'
+                )
+            headers += chunk
 
-    separator = headers.find(b'\r\n\r\n')
-    headers = headers[:separator+4]
+        separator = headers.find(b'\r\n\r\n')
+        headers = headers[:separator+4]
+    finally:
+        client_socket.settimeout(original_timeout)
 
     return headers
 

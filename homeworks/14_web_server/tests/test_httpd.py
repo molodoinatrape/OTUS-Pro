@@ -1,9 +1,11 @@
 import socket
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import httpd
 
 from httpd import (
     build_response,
@@ -30,6 +32,7 @@ def test_receive_headers_collects_fragments_and_discards_tail():
     # Каждый recv вернёт очередную порцию; конец заголовков разрезан между
     # ними.
     connection = Mock()
+    connection.gettimeout.return_value = None
     connection.recv.side_effect = [
         b"GET / HTTP/1.1\r\nHost: local",
         b"host\r\n\r",
@@ -79,6 +82,63 @@ def test_receive_headers_times_out_for_silent_open_connection(socket_pair):
 
     with pytest.raises(TimeoutError):
         receive_headers(receiver)
+
+
+@pytest.mark.parametrize("original_timeout", [None, 3.0])
+@pytest.mark.parametrize("outcome", ["success", "eof", "timeout"])
+def test_headers_restore_socket_timeout(
+    monkeypatch, original_timeout, outcome
+):
+    # После чтения или ошибки отправка ответа получает прежний таймаут.
+    connection = Mock()
+    connection.gettimeout.return_value = original_timeout
+    monkeypatch.setattr(
+        httpd, "time", SimpleNamespace(monotonic=lambda: 100.0)
+    )
+    if outcome == "success":
+        connection.recv.return_value = b"GET / HTTP/1.1\r\n\r\n"
+        assert receive_headers(connection, header_timeout=5.0)
+    else:
+        if outcome == "eof":
+            connection.recv.return_value = b""
+            expected = ValueError
+        else:
+            connection.recv.side_effect = TimeoutError("test timeout")
+            expected = TimeoutError
+        with pytest.raises(expected):
+            receive_headers(connection, header_timeout=5.0)
+
+    applied = connection.settimeout.call_args_list
+    assert applied[0].args[0] == (
+        5.0 if original_timeout is None else original_timeout
+    )
+    assert applied[-1].args[0] == original_timeout
+
+
+def test_headers_fragments_do_not_extend_deadline(monkeypatch):
+    # Часы подменены: тест проверяет общий срок без настоящего ожидания.
+    clock = Mock(side_effect=[100.0, 100.1, 100.6, 101.1])
+    monkeypatch.setattr(httpd, "time", SimpleNamespace(monotonic=clock))
+    connection = Mock()
+    connection.gettimeout.return_value = 5.0
+    connection.recv.side_effect = [b"GET ", b"/ "]
+
+    with pytest.raises(TimeoutError, match="Истекло время"):
+        receive_headers(connection, header_timeout=1.0)
+
+    # Третий recv уже не должен начаться; срок не продлевается порциями.
+    assert connection.recv.call_count == 2
+    values = [call.args[0] for call in connection.settimeout.call_args_list]
+    assert values == pytest.approx([0.9, 0.4, 5.0])
+
+
+def test_headers_deadline_limits_real_socket_and_restores_timeout(socket_pair):
+    # Исходный таймаут больше дедлайна: молчание ограничивается общим сроком.
+    _, receiver = socket_pair
+    receiver.settimeout(2.0)
+    with pytest.raises(TimeoutError):
+        receive_headers(receiver, header_timeout=0.02)
+    assert receiver.gettimeout() == 2.0
 
 
 @pytest.mark.parametrize("method", ["GET", "POST"])

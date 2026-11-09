@@ -112,6 +112,7 @@ def test_handler_streams_file_and_head_never_reads(
     tracked.__exit__.side_effect = lambda *args: opened.close()
     monkeypatch.setattr(Path, "open", lambda *args, **kwargs: tracked)
     connection = MagicMock()
+    connection.gettimeout.return_value = 5.0
     connection.recv.return_value = request(method, "/stream.bin")
 
     try:
@@ -150,6 +151,7 @@ def test_stream_failure_closes_file_without_second_response(
     tracked.__exit__.side_effect = lambda *args: opened.close()
     monkeypatch.setattr(Path, "open", lambda *args, **kwargs: tracked)
     connection = MagicMock()
+    connection.gettimeout.return_value = 5.0
     connection.recv.return_value = request("GET", "/index.html")
     if failure == "early_eof":
         # Файл укоротился после fstat: закрываем соединение, не дописываем 404.
