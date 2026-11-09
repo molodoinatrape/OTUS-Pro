@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, nullcontext
 from pathlib import Path
 from threading import BoundedSemaphore
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -81,12 +81,12 @@ def test_handler_errors_and_head(root, method, target, code, expected):
 
 
 def test_handler_permission_error(root, monkeypatch):
-    # Права Windows и POSIX различаются, поэтому отказ чтения воспроизводим
+    # Права Windows и POSIX различаются, поэтому отказ открытия воспроизводим
     # явно.
-    def denied(path):
+    def denied(path, *args, **kwargs):
         raise PermissionError("test access denied")
 
-    monkeypatch.setattr(Path, "read_bytes", denied)
+    monkeypatch.setattr(Path, "open", denied)
     client, server = socket.socketpair()
     with client, server:
         client.settimeout(1)
@@ -95,6 +95,79 @@ def test_handler_permission_error(root, monkeypatch):
         status, _, body = split_response(read_response(client))
     assert status == "HTTP/1.1 403 Forbidden"
     assert body == b"Forbidden"
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+@pytest.mark.parametrize("size", [0, 150000])
+def test_handler_streams_file_and_head_never_reads(
+    root, monkeypatch, method, size
+):
+    # Настоящий файл позволяет проверить размер, порции и закрытие ресурса.
+    path = root / "stream.bin"
+    payload = (bytes(range(256)) * 586)[:size]
+    path.write_bytes(payload)
+    opened = path.open("rb")
+    tracked = MagicMock(wraps=opened)
+    tracked.__enter__.return_value = tracked
+    tracked.__exit__.side_effect = lambda *args: opened.close()
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: tracked)
+    connection = MagicMock()
+    connection.recv.return_value = request(method, "/stream.bin")
+
+    try:
+        httpd.handle_request(connection, root)
+        assert opened.closed
+    finally:
+        opened.close()
+
+    sent = [call.args[0] for call in connection.sendall.call_args_list]
+    status, headers, body = split_response(b"".join(sent))
+    assert status == "HTTP/1.1 200 OK"
+    assert headers["Content-Length"] == str(size)
+    assert body == (payload if method == "GET" else b"")
+    if method == "HEAD" or size == 0:
+        # HEAD узнаёт размер через fstat, но содержимое вообще не читает.
+        tracked.read.assert_not_called()
+        assert len(sent) == 1
+    else:
+        # Файл больше буфера передаётся полностью.
+        # Повторных заголовков после тела быть не должно.
+        assert [call.args[0] for call in tracked.read.call_args_list] == [
+            65536,
+            65536,
+            18928,
+        ]
+        assert [len(chunk) for chunk in sent[1:]] == [65536, 65536, 18928]
+
+
+@pytest.mark.parametrize("failure", ["early_eof", "send"])
+def test_stream_failure_closes_file_without_second_response(
+    root, monkeypatch, failure
+):
+    opened = (root / "index.html").open("rb")
+    tracked = MagicMock(wraps=opened)
+    tracked.__enter__.return_value = tracked
+    tracked.__exit__.side_effect = lambda *args: opened.close()
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: tracked)
+    connection = MagicMock()
+    connection.recv.return_value = request("GET", "/index.html")
+    if failure == "early_eof":
+        # Файл укоротился после fstat: закрываем соединение, не дописываем 404.
+        tracked.read.return_value = b""
+    else:
+        # Заголовки отправлены, но отправка тела завершилась ошибкой.
+        connection.sendall.side_effect = [None, OSError("send failed")]
+
+    try:
+        with pytest.raises(OSError):
+            httpd.handle_request(connection, root)
+        assert opened.closed
+    finally:
+        opened.close()
+
+    sent = [call.args[0] for call in connection.sendall.call_args_list]
+    assert sent[0].startswith(b"HTTP/1.1 200 OK\r\n")
+    assert not any(chunk.startswith(b"HTTP/1.1") for chunk in sent[1:])
 
 
 @pytest.mark.parametrize("method", ["GET", "HEAD"])

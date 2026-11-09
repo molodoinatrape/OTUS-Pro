@@ -1,3 +1,4 @@
+import os
 import socket
 import signal
 import argparse
@@ -101,6 +102,7 @@ def build_response(
         body: bytes,
         content_type: str,
         head_only: bool = False,
+        content_length: int | None = None,
 ) -> bytes:
     """
     Сборка ответа
@@ -111,12 +113,16 @@ def build_response(
         404: 'Not Found',
         405: 'Method Not Allowed',
     }
+
+    if content_length is None:
+        content_length = len(body)
+
     headers = [
         f'HTTP/1.1 {status_code} {status_codes[status_code]}',
         f'Date: {formatdate(usegmt=True)}',
         'Server: StudyServer',
         f'Content-Type: {content_type}',
-        f'Content-Length: {len(body)}',
+        f'Content-Length: {content_length}',
         'Connection: close',
     ]
     if status_code == 405:
@@ -152,7 +158,7 @@ def handle_request(client_socket, document_root: Path) -> None:
 
         try:
             path = resolve_path(url, document_root)
-            body = path.read_bytes()
+            file = path.open('rb')
         except (ValueError, PermissionError, IsADirectoryError):
             response = build_response(
                 status_code=403,
@@ -168,12 +174,32 @@ def handle_request(client_socket, document_root: Path) -> None:
                 head_only=head_only,
             )
         else:
-            response = build_response(
-                status_code=200,
-                body=body,
-                content_type=get_content_type(path),
-                head_only=head_only,
-            )
+            with file:
+                content_length = os.fstat(file.fileno()).st_size
+                response = build_response(
+                    status_code=200,
+                    body=b'',
+                    content_type=get_content_type(path),
+                    head_only=head_only,
+                    content_length=content_length,
+                )
+
+                client_socket.sendall(response)
+
+                if not head_only:
+                    remaining = content_length
+
+                    while remaining > 0:
+                        chunk = file.read(min(65536, remaining))
+
+                        if chunk == b'':
+                            raise OSError(
+                                'Файл закончился раньше объявленного размера'
+                            )
+                        client_socket.sendall(chunk)
+                        remaining -= len(chunk)
+
+                return None
 
         client_socket.sendall(response)
 
@@ -287,8 +313,8 @@ def serve(
               f'Лимит задач на процесс: {threads + max_queue}'
               )
 
-        # Не ждём новое соединение дольше 0.5 сек за одну попытку
-        # Регулярно возвращаемся из accept для обработки Ctrl+C
+        # Ограничиваем ожидание accept в рабочих процессах,
+        # чтобы они регулярно проверяли общий флаг остановки.
         server.settimeout(0.5)
 
         processes = []
