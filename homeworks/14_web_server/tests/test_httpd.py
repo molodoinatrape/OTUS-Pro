@@ -160,6 +160,36 @@ def test_parse_request_line_rejects_missing_version():
         parse_request_line(b"GET /index.html\r\n\r\n")
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        b"GET / BANANA",
+        b"GET / HTTP/1x1",
+        b"GET / HTTP/1.10",
+        b"GET / http/1.1",
+        b"G(ET / HTTP/1.1",
+        b"GET /bad\x00name HTTP/1.1",
+        b"GET /bad\tname HTTP/1.1",
+        b"GET  / HTTP/1.1",
+        b"GET  HTTP/1.1",
+        b"GET\t / HTTP/1.1",
+        b"GET / HTTP/1.1\t",
+        b"GET /\xff HTTP/1.1",
+    ],
+)
+def test_request_line_rejects_invalid_syntax(line):
+    # Пробелы и управляющие символы нельзя незаметно удалить через split().
+    with pytest.raises(ValueError):
+        parse_request_line(line + b"\r\n\r\n")
+
+
+@pytest.mark.parametrize("version", ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0"])
+def test_request_line_checks_version_syntax_only(version):
+    # Поддержку версии проверит обработчик, поэтому форма HTTP/2.0 допустима.
+    line = f"POST /my%20file.html?q=1 {version}\r\n\r\n".encode("ascii")
+    assert parse_request_line(line) == ("POST", "/my%20file.html?q=1", version)
+
+
 @pytest.fixture
 def document_root(tmp_path):
     # Каждый тест получает свой каталог; настоящая папка www проекта не

@@ -1,14 +1,19 @@
 import os
+import re
 import time
 import socket
 import signal
 import argparse
+import logging
 import multiprocessing
 from threading import BoundedSemaphore
 from email.utils import formatdate
 from pathlib import Path
 from urllib.parse import urlsplit, unquote
 from concurrent.futures import ThreadPoolExecutor
+
+
+logger = logging.getLogger(__name__)
 
 
 def receive_headers(
@@ -61,12 +66,22 @@ def parse_request_line(headers: bytes) -> tuple[str, str, str]:
     request_line = headers.split(b'\r\n', 1)[0]
     request_line = request_line.decode('ascii')
 
-    if len(request_line.split()) != 3:
+    parts = request_line.split(' ')
+
+    if len(parts) != 3 or not all(parts):
         raise ValueError(f'{request_line} - ошибочная строка')
 
-    method, url, version = request_line.split()
+    method, url, version = parts
 
-    return method, url, version
+    # проверяем допустимые символы HTTP-метода
+    # проверяем, что цель запроса содержит только видимые
+    # ASCII-символы
+    if (re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+", method)
+            and re.fullmatch(r'[\x21-\x7e]+', url)
+            and re.fullmatch(r'HTTP/[0-9]\.[0-9]', version)):
+        return method, url, version
+
+    raise ValueError('Некорректный метод, цель или версия HTTP')
 
 
 def resolve_path(target: str, document_root: Path) -> Path:
@@ -236,7 +251,16 @@ def handle_client(
     try:
         handle_request(client_socket, document_root)
     except (ValueError, OSError) as error:
-        print(f'Ошибка соединения с {client_address}: {error}')
+        logger.warning(
+            'Ошибка соединения с %s: %s',
+            client_address,
+            error,
+        )
+    except Exception:
+        logger.exception(
+            'Неожиданная ошибка обработки клиента %s',
+            client_address,
+        )
     finally:
         slots.release()
 
@@ -300,6 +324,14 @@ def worker_entry(
     # Ctrl+C обрабатывает родитель и поднимает общий stop_event
     # Этот процесс завершается по флагу, а не через KeyboardInterrupt
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format=(
+            '%(asctime)s %(levelname)s %(name)s '
+            '[pid=%(process)d %(threadName)s] %(message)s'
+        ),
+    )
 
     with server:
         server.settimeout(0.5)

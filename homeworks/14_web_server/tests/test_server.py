@@ -1,6 +1,7 @@
 """Проверки ошибок, ограничителя и настоящего TCP-сервера."""
 
 import os
+import logging
 import signal
 import socket
 import subprocess
@@ -416,15 +417,57 @@ def test_server_rolls_back_slot_before_submission(root, monkeypatch, stage):
         connection.close.assert_called_once()
 
 
-def test_worker_releases_slot_on_unexpected_exception(root, monkeypatch):
-    # finally возвращает место даже для ошибки, которую wrapper не
-    # перехватывает.
+def test_worker_releases_slot_on_unexpected_exception(
+    root, monkeypatch, caplog
+):
+    # Ошибка задачи записывается с traceback, а место возвращается в пул.
     slots = BoundedSemaphore(1)
     slots.acquire()
     monkeypatch.setattr(
         httpd, "handle_request", Mock(side_effect=RuntimeError("unexpected"))
     )
-    with pytest.raises(RuntimeError, match="unexpected"):
+    with caplog.at_level(logging.ERROR, logger=httpd.logger.name):
+        httpd.handle_client(Mock(), ("127.0.0.1", 1), root, slots)
+    records = [r for r in caplog.records if r.name == httpd.logger.name]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    assert records[0].exc_info[0] is RuntimeError
+    assert "127.0.0.1" in records[0].getMessage()
+    assert "unexpected" in caplog.text
+    assert slots.acquire(blocking=False)
+    assert not slots.acquire(blocking=False)
+
+
+@pytest.mark.parametrize(
+    "error", [ValueError("bad request"), OSError("reset")]
+)
+def test_expected_client_error_is_warning_without_traceback(
+    root, monkeypatch, caplog, error
+):
+    # Обычный отказ соединения не требует traceback, но не теряет слот.
+    slots = BoundedSemaphore(1)
+    slots.acquire()
+    monkeypatch.setattr(httpd, "handle_request", Mock(side_effect=error))
+    with caplog.at_level(logging.WARNING, logger=httpd.logger.name):
+        httpd.handle_client(Mock(), ("127.0.0.1", 1), root, slots)
+    records = [r for r in caplog.records if r.name == httpd.logger.name]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert records[0].exc_info is None
+    assert str(error) in records[0].getMessage()
+    assert slots.acquire(blocking=False)
+    assert not slots.acquire(blocking=False)
+
+
+@pytest.mark.parametrize("error", [KeyboardInterrupt(), SystemExit()])
+def test_client_wrapper_does_not_swallow_process_control(
+    root, monkeypatch, error
+):
+    # Широкий except Exception не должен подавлять сигналы завершения.
+    slots = BoundedSemaphore(1)
+    slots.acquire()
+    monkeypatch.setattr(httpd, "handle_request", Mock(side_effect=error))
+    with pytest.raises(type(error)):
         httpd.handle_client(Mock(), ("127.0.0.1", 1), root, slots)
     assert slots.acquire(blocking=False)
     assert not slots.acquire(blocking=False)
